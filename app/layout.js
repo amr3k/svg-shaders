@@ -41,7 +41,7 @@ export default function RootLayout({ children }) {
               Shu
             </a>
             , source code on{' '}
-            <a href='https://github.com/shuding/svg-shader' target='_blank'>
+            <a href='https://github.com/shuding/svg-shaders' target='_blank'>
               GitHub
             </a>
             .
