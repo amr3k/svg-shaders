@@ -16,6 +16,10 @@ function texture(x, y) {
   }
 }
 
+// Making this higher will improve the quality (resolution) of the displacement
+// map but decrease performance.
+const canvasDPI = 1.2
+
 function Shader({
   width = 100,
   height = 100,
@@ -27,7 +31,9 @@ function Shader({
   const id = useId().replace(/[#:]/g, '-')
   const canvasRef = useRef()
   const feImageRef = useRef()
+  const feDisplacementMapRef = useRef()
   const containerRef = useRef()
+  const debugRef = useRef()
 
   const mouseRef = useRef({ x: 0, y: 0 })
   const mouseUsed = useRef(false)
@@ -56,13 +62,10 @@ function Shader({
     const canvas = canvasRef.current
     if (!canvas) return
     if (!feImageRef.current) return
+    if (!feDisplacementMapRef.current) return
 
     const context = canvas.getContext('2d')
 
-    const scale = Math.max(width, height) * 2
-
-    const w = width - 1
-    const h = height - 1
     const mouse = new Proxy(mouseRef.current, {
       get: (target, prop) => {
         mouseUsed.current = true
@@ -71,10 +74,18 @@ function Shader({
     })
 
     mouseUsed.current = false
-    const data = new Uint8ClampedArray(width * height * 4)
+
+    const w = width * canvasDPI
+    const h = height * canvasDPI
+    const data = new Uint8ClampedArray(w * h * 4)
+
+    // Dynamic scale to make it as smooth as possible to ensure the best quality
+    // but also meet the requirements of the shader.
+    let maxScale = 0
+    const rawValues = []
     for (let i = 0; i < data.length; i += 4) {
-      const x = (i / 4) % width
-      const y = ~~(i / 4 / width)
+      const x = (i / 4) % w
+      const y = ~~(i / 4 / w)
       const pos = fragment(
         {
           x: x / w,
@@ -82,26 +93,35 @@ function Shader({
         },
         mouse
       )
-      const r = (pos.x * w - x) / scale + 0.5
-      const g = (pos.y * h - y) / scale + 0.5
+      const dx = pos.x * w - x
+      const dy = pos.y * h - y
+      maxScale = Math.max(maxScale, Math.abs(dx), Math.abs(dy))
+      rawValues.push(dx, dy)
+    }
+    maxScale *= 2
 
+    let index = 0
+    for (let i = 0; i < data.length; i += 4) {
+      const r = rawValues[index++] / maxScale + 0.5
+      const g = rawValues[index++] / maxScale + 0.5
       data[i] = r * 255
       data[i + 1] = g * 255
       data[i + 2] = 0
       data[i + 3] = 255
     }
-    context.putImageData(new ImageData(data, width, height), 0, 0)
+    context.putImageData(new ImageData(data, w, h), 0, 0)
+
     feImageRef.current.setAttribute('href', canvas.toDataURL())
-  }, [width, height, fragment, mouseDep])
+    feDisplacementMapRef.current.setAttribute('scale', maxScale / canvasDPI)
+    if (debugRef.current) {
+      debugRef.current.textContent = `Displacement Map (scale = ${maxScale.toFixed(
+        2
+      )})`
+    }
+  }, [width, height, fragment, mouseDep, canvasDPI])
 
   return (
     <>
-      <canvas
-        width={width}
-        height={height}
-        ref={canvasRef}
-        style={{ display: debug ? 'block' : 'none' }}
-      />
       <svg
         xmlns='http://www.w3.org/2000/svg'
         filterUnits='userSpaceOnUse'
@@ -131,7 +151,7 @@ function Shader({
               in2={`${id}_map`}
               xChannelSelector='R'
               yChannelSelector='G'
-              scale={Math.max(width, height) * 2}
+              ref={feDisplacementMapRef}
             />
           </filter>
         </defs>
@@ -148,11 +168,24 @@ function Shader({
       >
         {children}
       </div>
+      {debug ? (
+        <p
+          style={{ marginBottom: '0.2em', fontVariantNumeric: 'tabular-nums' }}
+        >
+          <small ref={debugRef}>Displacement Map</small>
+        </p>
+      ) : null}
+      <canvas
+        width={width * canvasDPI}
+        height={height * canvasDPI}
+        ref={canvasRef}
+        style={{ display: debug ? 'inline-block' : 'none', width, height }}
+      />
     </>
   )
 }
 
-function MagicCarpet({ children }) {
+function MagicCarpet({ children, debug }) {
   const [rotation, setRotation] = useState(36)
   const [wave, setWave] = useState(0.6)
 
@@ -161,7 +194,7 @@ function MagicCarpet({ children }) {
       <Shader
         width={240}
         height={240}
-        debug={false}
+        debug={debug}
         fragment={(uv, mouse) => {
           // Rotate X degrees around the center
           const angle = (rotation * Math.PI) / 180
@@ -207,7 +240,7 @@ function MagicCarpet({ children }) {
   )
 }
 
-function Pixelate({ children }) {
+function Pixelate({ children, debug }) {
   const [size, setSize] = useState(20)
 
   return (
@@ -215,7 +248,7 @@ function Pixelate({ children }) {
       <Shader
         width={240}
         height={240}
-        debug={false}
+        debug={debug}
         fragment={(uv) => {
           // Round to the nearest multiple of `size`
           const x = Math.round(uv.x * size) / size
@@ -240,7 +273,7 @@ function Pixelate({ children }) {
   )
 }
 
-function Noise({ children }) {
+function Noise({ children, debug }) {
   const [size, setSize] = useState(20)
 
   return (
@@ -248,7 +281,7 @@ function Noise({ children }) {
       <Shader
         width={240}
         height={240}
-        debug={false}
+        debug={debug}
         fragment={(uv, mouse) => {
           // Apply a random offset to each pixel
           // If it's close to the mouse, the offset is smaller
@@ -268,7 +301,7 @@ function Noise({ children }) {
         <input
           type='range'
           value={size}
-          min={10}
+          min={5}
           max={30}
           onChange={(e) => setSize(e.target.value)}
         />
@@ -277,7 +310,7 @@ function Noise({ children }) {
   )
 }
 
-function Fractal({ children }) {
+function Fractal({ children, debug }) {
   const [size, setSize] = useState(5)
 
   return (
@@ -285,7 +318,7 @@ function Fractal({ children }) {
       <Shader
         width={240}
         height={240}
-        debug={false}
+        debug={debug}
         fragment={(uv) => {
           const x = (uv.x * size) % 1
           const y = (uv.y * size) % 1
@@ -309,26 +342,86 @@ function Fractal({ children }) {
   )
 }
 
+function Spiral({ children, debug }) {
+  const [size, setSize] = useState(10)
+
+  return (
+    <>
+      <Shader
+        width={240}
+        height={240}
+        debug={debug}
+        fragment={(uv) => {
+          const x = uv.x - 0.5
+          const y = uv.y - 0.5
+          const r = Math.sqrt(x ** 2 + y ** 2)
+          const theta = Math.atan2(y, x)
+          const angle = theta + (r * size) / 10
+          const nx = Math.cos(angle) * r + 0.5
+          const ny = Math.sin(angle) * r + 0.5
+          return texture(nx, ny)
+        }}
+      >
+        {children}
+      </Shader>
+      <br />
+      <fieldset>
+        <legend>Size</legend>
+        <input
+          type='range'
+          value={size}
+          min={0}
+          max={200}
+          onChange={(e) => setSize(e.target.value)}
+        />
+      </fieldset>
+    </>
+  )
+}
+
 export default function Page() {
   const [selectedShader, setShader] = useState('MagicCarpet')
+  const [showDebug, setShowDebug] = useState(false)
 
   // Other ideas: raindrops, snowflakes, black hole, glitch, CRT, scanlines, etc...
-  const SelectedShader = { MagicCarpet, Pixelate, Noise, Fractal }[
+  const SelectedShader = { MagicCarpet, Pixelate, Noise, Fractal, Spiral }[
     selectedShader
   ]
 
   return (
     <>
-      <select
-        style={{ marginBottom: 20 }}
-        onChange={(e) => setShader(e.target.value)}
+      <div
+        style={{
+          display: 'flex',
+          gap: 10,
+          alignItems: 'center',
+          marginBottom: 20,
+          fontSize: '.85em',
+        }}
       >
-        <option value='MagicCarpet'>Shader: Magic Carpet</option>
-        <option value='Noise'>Shader: Noise</option>
-        <option value='Pixelate'>Shader: Pixelate</option>
-        <option value='Fractal'>Shader: Fractal</option>
-      </select>
-      <SelectedShader>
+        <select onChange={(e) => setShader(e.target.value)}>
+          <option value='MagicCarpet'>Shader: Magic Carpet</option>
+          <option value='Noise'>Shader: Noise</option>
+          <option value='Pixelate'>Shader: Pixelate</option>
+          <option value='Fractal'>Shader: Fractal</option>
+          <option value='Spiral'>Shader: Spiral</option>
+        </select>
+        <label
+          style={{
+            display: 'flex',
+            gap: 5,
+            alignItems: 'center',
+            userSelect: 'none',
+          }}
+        >
+          <input
+            type='checkbox'
+            onChange={(e) => setShowDebug(e.target.checked)}
+          />
+          <span>Debug</span>
+        </label>
+      </div>
+      <SelectedShader debug={showDebug}>
         <div
           style={{
             display: 'flex',
@@ -336,11 +429,12 @@ export default function Page() {
             gap: 10,
             background: 'yellow',
             borderRadius: 30,
-            width: 220,
-            height: 220,
+            width: 210,
+            height: 210,
             padding: 20,
-            margin: 1,
-            border: '1px solid #000',
+            margin: 10,
+            border: '1px solid #ccc',
+            boxShadow: '0 5px 10px rgba(0, 0, 0, 0.15)',
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'center', gap: 10 }}>
